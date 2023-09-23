@@ -1,0 +1,12 @@
+apiVersion: deploy.deploy-monitor.local/v1alpha1
+kind: Monitor
+metadata:
+  labels:
+    app.kubernetes.io/name: monitor
+    app.kubernetes.io/instance: monitor-sample
+    app.kubernetes.io/part-of: k8s-deploy-monitor
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: k8s-deploy-monitor
+  name: monitor-sample
+spec:
+  # TODO(user): Add fields here
