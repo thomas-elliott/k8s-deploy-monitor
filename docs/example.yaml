@@ -1,0 +1,8 @@
+apiVersion: deploy.deploy-monitor.local/v1alpha1
+kind: Monitor
+metadata:
+  name: monitor-config
+  namespace: default
+spec:
+  webhookEndpoint: "https://your-webhook-endpoint-here"
+  apiKey: "your-api-key-here"
