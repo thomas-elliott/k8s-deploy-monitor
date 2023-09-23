@@ -39,14 +39,14 @@ spec:
                 type: string
               apiKeyHeader:
                 type: string
-                default: "X-API-Key"
-              podEndpoint:
-                type: string
               deploymentEndpoint:
                 type: string
+              podEndpoint:
+                type: string
             required:
-            - podEndpoint
+            - apiKeyHeader
             - deploymentEndpoint
+            - podEndpoint
             type: object
           status:
             description: MonitorStatus defines the observed state of Monitor

@@ -49,10 +49,6 @@ type MonitorReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Monitor object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
@@ -88,15 +84,14 @@ func (r *MonitorReconciler) handlePod(ctx context.Context, pod *corev1.Pod) (ctr
 	log.Info("Processing Pod", "name", pod)
 
 	payload := map[string]interface{}{
-		"pod":             pod.Name,
-		"namespace":       pod.Namespace,
-		"image":           pod.Spec.Containers[0].Image,
-		"readyContainers": pod.Status.ContainerStatuses,
-		"status":          pod.Status,
-		"labels":          pod.ObjectMeta.Labels,
+		"pod":       pod.Name,
+		"namespace": pod.Namespace,
+		"image":     pod.Spec.Containers[0].Image,
+		"status":    pod.Status,
+		"labels":    pod.ObjectMeta.Labels,
 	}
 
-	r.sendPayloadToWebhook(ctx, payload)
+	r.sendPayloadToWebhook(ctx, "pod", payload)
 
 	return ctrl.Result{}, nil
 }
@@ -117,12 +112,12 @@ func (r *MonitorReconciler) handleDeployment(ctx context.Context, deployment *ap
 		"labels":          deployment.ObjectMeta.Labels,
 	}
 
-	r.sendPayloadToWebhook(ctx, payload)
+	r.sendPayloadToWebhook(ctx, "deployment", payload)
 
 	return ctrl.Result{}, nil
 }
 
-func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, payload interface{}) {
+func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, path string, payload interface{}) {
 	log := log.FromContext(ctx)
 
 	var monitorInstance deployv1alpha1.Monitor
@@ -131,8 +126,11 @@ func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, payload in
 		log.Error(err, "Failed to retrieve Monitor")
 	}
 
-	endpoint := monitorInstance.Spec.WebhookEndpoint
-	apiKey := monitorInstance.Spec.APIKey
+	endpoint := monitorInstance.Spec.DeploymentEndpoint
+	if path == "pod" {
+		endpoint = monitorInstance.Spec.PodEndpoint
+	}
+	apiKeyHeader := monitorInstance.Spec.APIKeyHeader
 	if endpoint == "" {
 		log.Info("No webhook set up")
 		return
@@ -151,8 +149,8 @@ func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, payload in
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		req.Header.Set("Api-Key", apiKey)
+	if monitorInstance.Spec.APIKey != nil {
+		req.Header.Set(apiKeyHeader, *monitorInstance.Spec.APIKey)
 	}
 
 	httpClient := &http.Client{}

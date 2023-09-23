@@ -24,8 +24,10 @@ import (
 
 // MonitorSpec defines the desired state of Monitor
 type MonitorSpec struct {
-	WebhookEndpoint string `json:"webhookEndpoint"`
-	APIKey          string `json:"apiKey"`
+	DeploymentEndpoint string  `json:"deploymentEndpoint"`
+	PodEndpoint        string  `json:"podEndpoint"`
+	APIKey             *string `json:"apiKey,omitempty"`
+	APIKeyHeader       string  `json:"apiKeyHeader"`
 }
 
 // MonitorStatus defines the observed state of Monitor
