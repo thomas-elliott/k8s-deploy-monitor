@@ -4,5 +4,7 @@ metadata:
   name: monitor-config
   namespace: default
 spec:
-  webhookEndpoint: "https://your-webhook-endpoint-here"
+  podEndpoint: "https://your-webhook-endpoint-here"
+  deploymentEndpoint: "https://your-webhook-endpoint-here"
   apiKey: "your-api-key-here"
+  apiKeyHeader: "Api-Key"

@@ -17,17 +17,22 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	deployv1alpha1 "github.com/thomas-elliott/k8s-deploy-monitor/api/v1alpha1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-
+	"io"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"net/http"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // MonitorReconciler reconciles a Monitor object
@@ -54,16 +59,6 @@ type MonitorReconciler struct {
 func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	var monitorInstance deployv1alpha1.Monitor
-	if err := r.Get(ctx, types.NamespacedName{Name: "monitor-config", Namespace: "default"}, &monitorInstance); err != nil {
-		// handle error
-		log.Error(err, "Failed to retrieve Monitor")
-	}
-
-	endpoint := monitorInstance.Spec.WebhookEndpoint
-	apiKey := monitorInstance.Spec.APIKey
-	log.Info("Processing Monitor", "name", monitorInstance.Name, "endpoint", endpoint, "apiKey", apiKey)
-
 	var pod corev1.Pod
 	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
 		if !errors.IsNotFound(err) {
@@ -71,7 +66,6 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, err
 		}
 
-		// If the error indicates the resource isn't a Pod, try fetching a Deployment
 		var deployment appsv1.Deployment
 		if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
 			if errors.IsNotFound(err) {
@@ -89,11 +83,20 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func (r *MonitorReconciler) handlePod(ctx context.Context, pod *corev1.Pod) (ctrl.Result, error) {
-	// TODO: So far the pods haven't been needed, leaving it behind for now
 	log := log.FromContext(ctx)
 
-	status := pod.Status
-	log.Info("Processing Pod", "name", pod.Name, "status", status)
+	log.Info("Processing Pod", "name", pod)
+
+	payload := map[string]interface{}{
+		"pod":             pod.Name,
+		"namespace":       pod.Namespace,
+		"image":           pod.Spec.Containers[0].Image,
+		"readyContainers": pod.Status.ContainerStatuses,
+		"status":          pod.Status,
+		"labels":          pod.ObjectMeta.Labels,
+	}
+
+	r.sendPayloadToWebhook(ctx, payload)
 
 	return ctrl.Result{}, nil
 }
@@ -102,18 +105,75 @@ func (r *MonitorReconciler) handlePod(ctx context.Context, pod *corev1.Pod) (ctr
 func (r *MonitorReconciler) handleDeployment(ctx context.Context, deployment *appsv1.Deployment) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	readyReplicas := deployment.Status.ReadyReplicas
-	desiredReplicas := deployment.Status.Replicas
-	image := deployment.Spec.Template.Spec.Containers[0].Image
-	log.Info("Processing Deployment", "name", deployment.Name, "readyReplicas", readyReplicas, "desiredReplicas", desiredReplicas, "image", image)
+	log.Info("Processing Deployment", "name", deployment)
+
+	payload := map[string]interface{}{
+		"deployment":      deployment.Name,
+		"namespace":       deployment.Namespace,
+		"image":           deployment.Spec.Template.Spec.Containers[0].Image,
+		"readyReplicas":   deployment.Status.ReadyReplicas,
+		"desiredReplicas": deployment.Status.Replicas,
+		"status":          deployment.Status,
+		"labels":          deployment.ObjectMeta.Labels,
+	}
+
+	r.sendPayloadToWebhook(ctx, payload)
 
 	return ctrl.Result{}, nil
+}
+
+func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, payload interface{}) {
+	log := log.FromContext(ctx)
+
+	var monitorInstance deployv1alpha1.Monitor
+	if err := r.Get(ctx, types.NamespacedName{Name: "monitor-config", Namespace: "default"}, &monitorInstance); err != nil {
+		// handle error
+		log.Error(err, "Failed to retrieve Monitor")
+	}
+
+	endpoint := monitorInstance.Spec.WebhookEndpoint
+	apiKey := monitorInstance.Spec.APIKey
+	if endpoint == "" {
+		log.Info("No webhook set up")
+		return
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Error(err, "Failed to marshal payload")
+		return
+	}
+
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Error(err, "Failed to create request")
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Api-Key", apiKey)
+	}
+
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Error(err, "Failed to send request")
+		return
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Error(err, "Failed to close response body")
+		}
+	}(resp.Body)
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&appsv1.Deployment{}).
-		Owns(&corev1.Pod{}). // TODO: This isn't watching the pods
+		For(&deployv1alpha1.Monitor{}).
+		Watches(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForObject{}).
+		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

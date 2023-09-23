@@ -37,11 +37,16 @@ spec:
             properties:
               apiKey:
                 type: string
-              webhookEndpoint:
+              apiKeyHeader:
+                type: string
+                default: "X-API-Key"
+              podEndpoint:
+                type: string
+              deploymentEndpoint:
                 type: string
             required:
-            - apiKey
-            - webhookEndpoint
+            - podEndpoint
+            - deploymentEndpoint
             type: object
           status:
             description: MonitorStatus defines the observed state of Monitor
