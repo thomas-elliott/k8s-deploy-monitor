@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"net/http"
+	"regexp"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -67,6 +68,15 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var deployment appsv1.Deployment
 	var replicaSet appsv1.ReplicaSet
 
+	matches, err := r.namespaceMatchesFilter(ctx, req.Namespace)
+	if err != nil {
+		log.Error(err, "Namespace regex had error")
+		return ctrl.Result{}, err
+	}
+	if !matches {
+		return ctrl.Result{}, nil
+	}
+
 	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to retrieve Pod")
@@ -95,6 +105,24 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *MonitorReconciler) namespaceMatchesFilter(ctx context.Context, namespace string) (bool, error) {
+	var monitor deployv1alpha1.Monitor
+	if err := r.Get(ctx, types.NamespacedName{Name: "monitor-config", Namespace: "default"}, &monitor); err != nil {
+		return false, err
+	}
+
+	if monitor.Spec.NamespaceRegex == nil {
+		return true, nil
+	}
+
+	matched, err := regexp.MatchString(*monitor.Spec.NamespaceRegex, namespace)
+	if err != nil {
+		return false, err
+	}
+
+	return matched, nil
 }
 
 func (r *MonitorReconciler) handlePod(ctx context.Context, pod *corev1.Pod) (ctrl.Result, error) {

@@ -41,6 +41,8 @@ spec:
                 type: string
               deploymentEndpoint:
                 type: string
+              namespaceRegex:
+                type: string
               podEndpoint:
                 type: string
             required:

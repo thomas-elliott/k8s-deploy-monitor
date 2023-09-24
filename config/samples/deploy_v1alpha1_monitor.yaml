@@ -14,4 +14,4 @@ spec:
   deploymentEndpoint: "https://your-webhook-endpoint-here"
   apiKey: "your-api-key-here"
   apiKeyHeader: "Api-Key"
-
+  namespaceRegex: "dev-*"

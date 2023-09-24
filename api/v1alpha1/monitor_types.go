@@ -28,6 +28,7 @@ type MonitorSpec struct {
 	PodEndpoint        string  `json:"podEndpoint"`
 	APIKey             *string `json:"apiKey,omitempty"`
 	APIKeyHeader       string  `json:"apiKeyHeader"`
+	NamespaceRegex     *string `json:"namespaceRegex,omitempty"`
 }
 
 // MonitorStatus defines the observed state of Monitor
