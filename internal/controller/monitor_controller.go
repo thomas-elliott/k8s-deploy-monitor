@@ -178,7 +178,7 @@ func (r *MonitorReconciler) handleReplicaSet(ctx context.Context, replica *appsv
 		"replicas":    replica.Spec.Replicas,
 	}
 
-	r.sendPayloadToWebhook(ctx, "pod", payload) // TODO: New type
+	r.sendPayloadToWebhook(ctx, "replica", payload)
 
 	return ctrl.Result{}, nil
 }
@@ -195,6 +195,8 @@ func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, path strin
 	endpoint := monitorInstance.Spec.DeploymentEndpoint
 	if path == "pod" {
 		endpoint = monitorInstance.Spec.PodEndpoint
+	} else if path == "replica" {
+		endpoint = monitorInstance.Spec.ReplicaEndpoint
 	}
 	apiKeyHeader := monitorInstance.Spec.APIKeyHeader
 	if endpoint == "" {

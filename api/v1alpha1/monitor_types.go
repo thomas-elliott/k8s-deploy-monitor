@@ -26,6 +26,7 @@ import (
 type MonitorSpec struct {
 	DeploymentEndpoint string  `json:"deploymentEndpoint"`
 	PodEndpoint        string  `json:"podEndpoint"`
+	ReplicaEndpoint    string  `json:"replicaEndpoint"`
 	APIKey             *string `json:"apiKey,omitempty"`
 	APIKeyHeader       string  `json:"apiKeyHeader"`
 	NamespaceRegex     *string `json:"namespaceRegex,omitempty"`

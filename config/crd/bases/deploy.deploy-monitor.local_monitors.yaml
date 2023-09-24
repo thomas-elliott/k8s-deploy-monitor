@@ -45,10 +45,13 @@ spec:
                 type: string
               podEndpoint:
                 type: string
+              replicaEndpoint:
+                type: string
             required:
             - apiKeyHeader
             - deploymentEndpoint
             - podEndpoint
+            - replicaEndpoint
             type: object
           status:
             description: MonitorStatus defines the observed state of Monitor
