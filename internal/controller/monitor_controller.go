@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 	"strings"
 	"time"
@@ -42,6 +43,16 @@ import (
 type MonitorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	Config *MonitorConfig
+}
+
+type MonitorConfig struct {
+	NamespaceRegex    *regexp.Regexp
+	PodWebhook        string
+	DeploymentWebhook string
+	ReplicaWebhook    string
+	APIKey            string
+	APIKeyHeader      string
 }
 
 type ImageDetails struct {
@@ -68,7 +79,7 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var deployment appsv1.Deployment
 	var replicaSet appsv1.ReplicaSet
 
-	matches, err := r.namespaceMatchesFilter(ctx, req.Namespace)
+	matches, err := r.namespaceMatchesFilter(req.Namespace)
 	if err != nil {
 		log.Error(err, "Namespace regex had error")
 		return ctrl.Result{}, err
@@ -107,20 +118,51 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-func (r *MonitorReconciler) namespaceMatchesFilter(ctx context.Context, namespace string) (bool, error) {
+func (r *MonitorReconciler) refreshConfig(ctx context.Context) error {
+	log := log.FromContext(ctx)
+
 	var monitor deployv1alpha1.Monitor
+
 	if err := r.Get(ctx, types.NamespacedName{Name: "monitor-config", Namespace: "default"}, &monitor); err != nil {
-		return false, err
+		log.Error(err, "Failed to retrieve Monitor")
+		return err
 	}
 
-	if monitor.Spec.NamespaceRegex == nil {
+	if monitor.Spec.NamespaceRegex != nil {
+		regex, err := regexp.Compile(*monitor.Spec.NamespaceRegex)
+		if err != nil {
+			return err
+		}
+		r.Config.NamespaceRegex = regex
+	} else {
+		r.Config.NamespaceRegex = nil
+	}
+
+	r.Config.DeploymentWebhook = monitor.Spec.DeploymentEndpoint
+	r.Config.PodWebhook = monitor.Spec.PodEndpoint
+	r.Config.ReplicaWebhook = monitor.Spec.ReplicaEndpoint
+
+	if monitor.Spec.APIKey != nil {
+		r.Config.APIKey = *monitor.Spec.APIKey
+	}
+
+	if monitor.Spec.APIKeyHeader != "" {
+		r.Config.APIKeyHeader = monitor.Spec.APIKeyHeader
+	} else {
+		r.Config.APIKeyHeader = "X-Api-Key"
+	}
+
+	log.Info("Refreshed config")
+
+	return nil
+}
+
+func (r *MonitorReconciler) namespaceMatchesFilter(namespace string) (bool, error) {
+	if r.Config.NamespaceRegex == nil {
 		return true, nil
 	}
 
-	matched, err := regexp.MatchString(*monitor.Spec.NamespaceRegex, namespace)
-	if err != nil {
-		return false, err
-	}
+	matched := r.Config.NamespaceRegex.MatchString(namespace)
 
 	return matched, nil
 }
@@ -186,21 +228,14 @@ func (r *MonitorReconciler) handleReplicaSet(ctx context.Context, replica *appsv
 func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, path string, payload interface{}) {
 	log := log.FromContext(ctx)
 
-	var monitorInstance deployv1alpha1.Monitor
-	if err := r.Get(ctx, types.NamespacedName{Name: "monitor-config", Namespace: "default"}, &monitorInstance); err != nil {
-		// handle error
-		log.Error(err, "Failed to retrieve Monitor")
+	endpoint := r.Config.DeploymentWebhook
+	if path == "pod" {
+		endpoint = r.Config.PodWebhook
+	} else if path == "replica" {
+		endpoint = r.Config.ReplicaWebhook
 	}
 
-	endpoint := monitorInstance.Spec.DeploymentEndpoint
-	if path == "pod" {
-		endpoint = monitorInstance.Spec.PodEndpoint
-	} else if path == "replica" {
-		endpoint = monitorInstance.Spec.ReplicaEndpoint
-	}
-	apiKeyHeader := monitorInstance.Spec.APIKeyHeader
 	if endpoint == "" {
-		log.Info("No webhook set up")
 		return
 	}
 
@@ -217,8 +252,8 @@ func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, path strin
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if monitorInstance.Spec.APIKey != nil {
-		req.Header.Set(apiKeyHeader, *monitorInstance.Spec.APIKey)
+	if r.Config.APIKey != "" {
+		req.Header.Set(r.Config.APIKeyHeader, r.Config.APIKey)
 	}
 
 	httpClient := &http.Client{
@@ -267,8 +302,30 @@ func ParseContainerImage(image string) ImageDetails {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	monitorEventHandler := handler.EnqueueRequestsFromMapFunc(
+		func(a client.Object) []reconcile.Request {
+			if r.Config == nil {
+				r.Config = &MonitorConfig{}
+			}
+
+			// Update the configuration here
+			err := r.refreshConfig(context.Background())
+			if err != nil {
+				log.Log.Error(err, "Failed to refresh config")
+			}
+
+			return []reconcile.Request{
+				{NamespacedName: types.NamespacedName{
+					Name:      a.GetName(),
+					Namespace: a.GetNamespace(),
+				}},
+			}
+		},
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&deployv1alpha1.Monitor{}).
+		Watches(&source.Kind{Type: &deployv1alpha1.Monitor{}}, monitorEventHandler).
 		Watches(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForObject{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
 		Watches(&source.Kind{Type: &appsv1.ReplicaSet{}}, &handler.EnqueueRequestForObject{}).
