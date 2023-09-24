@@ -192,6 +192,7 @@ func (r *MonitorReconciler) handleDeployment(ctx context.Context, deployment *ap
 
 	payload := map[string]interface{}{
 		"deployment":      deployment.Name,
+		"revision":        deployment.Annotations["deployment.kubernetes.io/revision"],
 		"namespace":       deployment.Namespace,
 		"images":          ParseContainers(deployment.Spec.Template.Spec.Containers),
 		"readyReplicas":   deployment.Status.ReadyReplicas,
@@ -213,6 +214,7 @@ func (r *MonitorReconciler) handleReplicaSet(ctx context.Context, replica *appsv
 	payload := map[string]interface{}{
 		"replicaSet":  replica.Name,
 		"namespace":   replica.Namespace,
+		"revision":    replica.Annotations["deployment.kubernetes.io/revision"],
 		"labels":      replica.ObjectMeta.Labels,
 		"annotations": replica.Annotations,
 		"status":      replica.Status,
