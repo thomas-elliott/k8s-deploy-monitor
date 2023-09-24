@@ -10,9 +10,9 @@ metadata:
   name: monitor-config
   namespace: default
 spec:
+  apiKey: your-api-key-here
+  apiKeyHeader: Api-Key
   podEndpoint: "https://your-webhook-endpoint-here"
   deploymentEndpoint: "https://your-webhook-endpoint-here"
   replicaEndpoint: "https://your-webhook-endpoint-here"
-  apiKey: "your-api-key-here"
-  apiKeyHeader: "Api-Key"
-  namespaceRegex: "dev-*"
+  namespaceRegex: ^(dev|test|prod)-.*

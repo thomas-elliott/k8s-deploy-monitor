@@ -53,6 +53,7 @@ type MonitorConfig struct {
 	ReplicaWebhook    string
 	APIKey            string
 	APIKeyHeader      string
+	IsReady           bool
 }
 
 type ImageDetails struct {
@@ -73,6 +74,11 @@ type ImageDetails struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Early exit if the config doesn't exist
+	if r.Config == nil || r.Config.IsReady == false {
+		return ctrl.Result{}, nil
+	}
+
 	log := log.FromContext(ctx)
 
 	var pod corev1.Pod
@@ -314,6 +320,9 @@ func (r *MonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			err := r.refreshConfig(context.Background())
 			if err != nil {
 				log.Log.Error(err, "Failed to refresh config")
+				r.Config.IsReady = false
+			} else {
+				r.Config.IsReady = true
 			}
 
 			return []reconcile.Request{
