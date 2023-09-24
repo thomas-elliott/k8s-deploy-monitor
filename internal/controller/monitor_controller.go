@@ -33,12 +33,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"strings"
+	"time"
 )
 
 // MonitorReconciler reconciles a Monitor object
 type MonitorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type ImageDetails struct {
+	Name     string `json:"name"`
+	FullName string `json:"fullName"`
+	Tag      string `json:"tag"`
 }
 
 //+kubebuilder:rbac:groups=deploy.deploy-monitor.local,resources=monitors,verbs=get;list;watch;create;update;patch;delete
@@ -56,37 +64,48 @@ func (r *MonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	log := log.FromContext(ctx)
 
 	var pod corev1.Pod
+	var deployment appsv1.Deployment
+	var replicaSet appsv1.ReplicaSet
+
 	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to retrieve Pod")
 			return ctrl.Result{}, err
 		}
+	} else {
+		return r.handlePod(ctx, &pod)
+	}
 
-		var deployment appsv1.Deployment
-		if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
-			if errors.IsNotFound(err) {
-				log.Info("Neither Pod nor Deployment found, might have been deleted")
-				return ctrl.Result{}, nil
-			}
+	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
+		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to retrieve Deployment")
 			return ctrl.Result{}, err
 		}
-
+	} else {
 		return r.handleDeployment(ctx, &deployment)
 	}
 
-	return r.handlePod(ctx, &pod)
+	if err := r.Get(ctx, req.NamespacedName, &replicaSet); err != nil {
+		if !errors.IsNotFound(err) {
+			log.Error(err, "Failed to retrieve ReplicaSet")
+			return ctrl.Result{}, err
+		}
+	} else {
+		return r.handleReplicaSet(ctx, &replicaSet)
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *MonitorReconciler) handlePod(ctx context.Context, pod *corev1.Pod) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("Processing Pod", "name", pod)
+	log.Info("Processing Pod")
 
 	payload := map[string]interface{}{
 		"pod":       pod.Name,
 		"namespace": pod.Namespace,
-		"image":     pod.Spec.Containers[0].Image,
+		"images":    ParseContainers(pod.Spec.Containers),
 		"status":    pod.Status,
 		"labels":    pod.ObjectMeta.Labels,
 	}
@@ -96,16 +115,15 @@ func (r *MonitorReconciler) handlePod(ctx context.Context, pod *corev1.Pod) (ctr
 	return ctrl.Result{}, nil
 }
 
-// Separate handling logic for Deployments into its own method
 func (r *MonitorReconciler) handleDeployment(ctx context.Context, deployment *appsv1.Deployment) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("Processing Deployment", "name", deployment)
+	log.Info("Processing Deployment")
 
 	payload := map[string]interface{}{
 		"deployment":      deployment.Name,
 		"namespace":       deployment.Namespace,
-		"image":           deployment.Spec.Template.Spec.Containers[0].Image,
+		"images":          ParseContainers(deployment.Spec.Template.Spec.Containers),
 		"readyReplicas":   deployment.Status.ReadyReplicas,
 		"desiredReplicas": deployment.Status.Replicas,
 		"status":          deployment.Status,
@@ -113,6 +131,26 @@ func (r *MonitorReconciler) handleDeployment(ctx context.Context, deployment *ap
 	}
 
 	r.sendPayloadToWebhook(ctx, "deployment", payload)
+
+	return ctrl.Result{}, nil
+}
+
+func (r *MonitorReconciler) handleReplicaSet(ctx context.Context, replica *appsv1.ReplicaSet) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	log.Info("Processing ReplicaSet")
+
+	payload := map[string]interface{}{
+		"replicaSet":  replica.Name,
+		"namespace":   replica.Namespace,
+		"labels":      replica.ObjectMeta.Labels,
+		"annotations": replica.Annotations,
+		"status":      replica.Status,
+		"images":      ParseContainers(replica.Spec.Template.Spec.Containers),
+		"replicas":    replica.Spec.Replicas,
+	}
+
+	r.sendPayloadToWebhook(ctx, "pod", payload) // TODO: New type
 
 	return ctrl.Result{}, nil
 }
@@ -153,7 +191,9 @@ func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, path strin
 		req.Header.Set(apiKeyHeader, *monitorInstance.Spec.APIKey)
 	}
 
-	httpClient := &http.Client{}
+	httpClient := &http.Client{
+		Timeout: time.Second * 3,
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error(err, "Failed to send request")
@@ -167,11 +207,40 @@ func (r *MonitorReconciler) sendPayloadToWebhook(ctx context.Context, path strin
 	}(resp.Body)
 }
 
+func ParseContainers(containers []corev1.Container) []ImageDetails {
+	var images []ImageDetails
+
+	for _, container := range containers {
+		images = append(images, ParseContainerImage(container.Image))
+	}
+
+	return images
+}
+
+func ParseContainerImage(image string) ImageDetails {
+	details := ImageDetails{
+		FullName: image,
+	}
+
+	parts := strings.Split(image, ":")
+	if len(parts) > 1 {
+		details.Tag = parts[len(parts)-1]
+	}
+
+	imageParts := strings.Split(parts[0], "/")
+	if len(imageParts) > 1 {
+		details.Name = imageParts[len(imageParts)-1]
+	}
+
+	return details
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&deployv1alpha1.Monitor{}).
 		Watches(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForObject{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
+		Watches(&source.Kind{Type: &appsv1.ReplicaSet{}}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

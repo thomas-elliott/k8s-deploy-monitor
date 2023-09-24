@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/part-of: k8s-deploy-monitor
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: k8s-deploy-monitor
-  name: monitor-sample
+  name: monitor-config
+  namespace: default
 spec:
-  # TODO(user): Add fields here
+  podEndpoint: "https://your-webhook-endpoint-here"
+  deploymentEndpoint: "https://your-webhook-endpoint-here"
+  apiKey: "your-api-key-here"
+  apiKeyHeader: "Api-Key"
+
