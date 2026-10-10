@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -254,15 +255,54 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should send changes in watched namespaces to the Monitor's webhooks", func() {
+			DeferCleanup(func() {
+				_, _ = utils.Run(exec.Command("kubectl", "delete", "monitor", "e2e", "--ignore-not-found"))
+				_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", "e2e-hook", "e2e-apps", "--ignore-not-found"))
+			})
+
+			By("creating the webhook receiver, watched namespace, API key Secret and Monitor")
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(monitorScenarioManifests)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the Monitor to become Ready")
+			cmd = exec.Command("kubectl", "wait", "monitor/e2e", "--for=condition=Ready", "--timeout=2m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating a Deployment in the watched namespace")
+			cmd = exec.Command("kubectl", "create", "deployment", "web", "-n", "e2e-apps",
+				"--image=registry.k8s.io/pause:3.10")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("checking the receiver got a Deployment, ReplicaSet and Pod with the API key")
+			Eventually(func(g Gomega) {
+				output, err := utils.Run(exec.Command("kubectl", "logs", "hook", "-n", "e2e-hook"))
+				g.Expect(err).NotTo(HaveOccurred())
+				paths := map[string]bool{}
+				for _, line := range utils.GetNonEmptyLines(output) {
+					var req receivedWebhook
+					if json.Unmarshal([]byte(line), &req) != nil {
+						continue
+					}
+					g.Expect(req.APIKey).To(Equal("e2e-secret"))
+					if req.Body["namespace"] == "e2e-apps" {
+						paths[req.Path] = true
+					}
+				}
+				g.Expect(paths).To(HaveKey("/deployment"))
+				g.Expect(paths).To(HaveKey("/replicaset"))
+				g.Expect(paths).To(HaveKey("/pod"))
+			}, 3*time.Minute).Should(Succeed())
+
+			By("checking the Monitor reports successful delivery")
+			cmd = exec.Command("kubectl", "wait", "monitor/e2e", "--for=condition=Delivering", "--timeout=1m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 })
 
@@ -321,3 +361,87 @@ type tokenRequest struct {
 		Token string `json:"token"`
 	} `json:"status"`
 }
+
+type receivedWebhook struct {
+	Path   string         `json:"path"`
+	APIKey string         `json:"apiKey"`
+	Body   map[string]any `json:"body"`
+}
+
+const monitorScenarioManifests = `
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-hook
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hook
+  namespace: e2e-hook
+  labels:
+    app: hook
+spec:
+  containers:
+  - name: hook
+    image: python:3-alpine
+    command: ["python3", "-u", "-c"]
+    args:
+    - |
+      import http.server, json
+      class Handler(http.server.BaseHTTPRequestHandler):
+          def do_POST(self):
+              body = self.rfile.read(int(self.headers["Content-Length"]))
+              print(json.dumps({"path": self.path, "apiKey": self.headers.get("Api-Key"), "body": json.loads(body)}))
+              self.send_response(200)
+              self.end_headers()
+          def log_message(self, *args):
+              pass
+      http.server.HTTPServer(("", 8080), Handler).serve_forever()
+    ports:
+    - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hook
+  namespace: e2e-hook
+spec:
+  selector:
+    app: hook
+  ports:
+  - port: 8080
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-apps
+  labels:
+    e2e: watched
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hook-key
+  namespace: ` + namespace + `
+stringData:
+  apiKey: e2e-secret
+---
+apiVersion: deploy.deploy-monitor.local/v1alpha1
+kind: Monitor
+metadata:
+  name: e2e
+spec:
+  namespaceSelector:
+    matchLabels:
+      e2e: watched
+  endpoints:
+    deployment: http://hook.e2e-hook.svc:8080/deployment
+    replicaSet: http://hook.e2e-hook.svc:8080/replicaset
+    pod: http://hook.e2e-hook.svc:8080/pod
+  auth:
+    header: Api-Key
+    secretRef:
+      name: hook-key
+      key: apiKey
+`
