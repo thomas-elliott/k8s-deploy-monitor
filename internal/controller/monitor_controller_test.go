@@ -161,6 +161,7 @@ var _ = Describe("Webhook delivery", Ordered, func() {
 			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
 			Endpoints: deployv1alpha1.Endpoints{
 				Deployment: rec.URL + "/deployment",
+				ReplicaSet: rec.URL + "/replicaset",
 				Pod:        rec.URL + "/pod",
 			},
 			Auth: &deployv1alpha1.Auth{
@@ -184,6 +185,32 @@ var _ = Describe("Webhook delivery", Ordered, func() {
 
 		Consistently(func() []webhookRequest { return rec.received("/deployment", "deployment", "web", "dev-a") }).
 			Should(BeEmpty())
+	})
+
+	It("sends ReplicaSets with their revision and images", func() {
+		labels := map[string]string{"app": "web"}
+		replicaSet := &appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:   "prod-a",
+				Name:        "web-5d8f7c",
+				Annotations: map[string]string{"deployment.kubernetes.io/revision": "3"},
+			},
+			Spec: appsv1.ReplicaSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "nginx:1.25"}}},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, replicaSet)).To(Succeed())
+
+		Eventually(func() []webhookRequest { return rec.received("/replicaset", "replicaSet", "web-5d8f7c", "prod-a") }).
+			ShouldNot(BeEmpty())
+		req := rec.received("/replicaset", "replicaSet", "web-5d8f7c", "prod-a")[0]
+		Expect(req.Header.Get("Api-Key")).To(Equal("s3cret"))
+		Expect(req.Body).To(HaveKeyWithValue("revision", "3"))
+		Expect(req.Body["images"]).To(ConsistOf(HaveKeyWithValue("name", "nginx")))
 	})
 
 	It("does not resend an unchanged Deployment", func() {
