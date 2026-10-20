@@ -7,6 +7,9 @@ metadata:
   name: monitor-sample
 spec:
   namespaceRegex: ^(dev|test|prod)-.*
+  namespaceSelector:
+    matchLabels:
+      deploy-monitor: enabled
   endpoints:
     deployment: https://your-webhook-endpoint-here/deployment
     replicaSet: https://your-webhook-endpoint-here/replicaset

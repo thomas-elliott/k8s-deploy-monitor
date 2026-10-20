@@ -7,26 +7,67 @@ k8s deploy monitor is a Kubernetes controller that observes changes in Deploymen
 - Can include an optional API key for webhook authentication.
 
 # Prerequisites
-Go 1.19
+Go 1.26
 Kubernetes cluster (for deployment)
 kubectl and kubeconfig properly set up to communicate with your cluster.
-Operator SDK
 
-```sh
-kubectl apply -f config/samples/
-```
-
-2. Build and push your image to the location specified by `IMG`:
+### Running on the cluster
+1. Build and push your image to the location specified by `IMG`:
 
 ```sh
 make docker-build docker-push IMG=<some-registry>/k8s-deploy-monitor:tag
 ```
 
-3. Deploy the controller to the cluster with the image specified by `IMG`:
+2. Deploy the controller to the cluster with the image specified by `IMG`:
 
 ```sh
 make deploy IMG=<some-registry>/k8s-deploy-monitor:tag
 ```
+
+3. Install Instances of Custom Resources:
+
+```sh
+kubectl apply -f config/samples/
+```
+
+# Monitor resource
+A `Monitor` is cluster-scoped and sets which namespaces to watch and which endpoints to notify. See [config/samples/deploy_v1alpha1_monitor.yaml](config/samples/deploy_v1alpha1_monitor.yaml) for an example. When both `namespaceRegex` and `namespaceSelector` are set, a namespace must match both.
+
+# Authenticating webhooks
+If a Monitor has `auth` set, each webhook request includes an API key in the header named by `auth.header` (default `X-Api-Key`). The key is read from the Secret in `auth.secretRef`, which must be in the controller's namespace (`k8s-deploy-monitor-system` when deployed with `make deploy`):
+
+```sh
+kubectl create secret generic monitor-sample-api-key -n k8s-deploy-monitor-system --from-literal=apiKey=<your-api-key>
+```
+
+# Webhook payload
+Example Deployment payload:
+
+```json
+{
+  "deployment": "my-app",
+  "revision": "3",
+  "namespace": "prod-web",
+  "images": [
+    { "name": "app", "fullName": "registry.example.com/team/app:v2", "tag": "v2" }
+  ],
+  "readyReplicas": 2,
+  "desiredReplicas": 2,
+  "status": {
+    "observedGeneration": 3,
+    "replicas": 2,
+    "updatedReplicas": 2,
+    "readyReplicas": 2,
+    "availableReplicas": 2
+  },
+  "labels": { "app": "my-app" }
+}
+```
+
+ReplicaSet and Pod payloads follow the same pattern; see [internal/controller/payloads.go](internal/controller/payloads.go). When a resource is deleted, `{"deployment": "my-app", "namespace": "prod-web", "deleted": true}` is sent.
+
+# Status
+`kubectl get monitors` shows two conditions: `Ready` (the Monitor's configuration and API key Secret are valid) and `Delivering` (the last webhook call succeeded).
 
 ### Uninstall CRDs
 To delete the CRDs from the cluster:
@@ -36,7 +77,7 @@ make uninstall
 ```
 
 ### Undeploy controller
-UnDeploy the controller from the cluster:
+Undeploy the controller from the cluster:
 
 ```sh
 make undeploy
@@ -67,10 +108,10 @@ make run
 **NOTE:** You can also run this in one step by running: `make install run`
 
 ### Modifying the API definitions
-If you are editing the API definitions, generate the manifests such as CRs or CRDs using:
+If you are editing the API definitions, generate the manifests such as CRDs and RBAC using:
 
 ```sh
-make manifests
+make manifests generate
 ```
 
 **NOTE:** Run `make --help` for more information on all potential `make` targets
@@ -79,4 +120,4 @@ More information can be found via the [Kubebuilder Documentation](https://book.k
 
 ## License
 
-TODO
+MIT, see [LICENSE](LICENSE).
