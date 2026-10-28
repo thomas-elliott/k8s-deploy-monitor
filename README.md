@@ -7,7 +7,7 @@ k8s deploy monitor is a Kubernetes controller that observes changes in Deploymen
 - Can include an optional API key for webhook authentication.
 
 # Prerequisites
-Go 1.26
+Go 1.26.10
 Kubernetes cluster (for deployment)
 kubectl and kubeconfig properly set up to communicate with your cluster.
 

@@ -1,6 +1,6 @@
 # Build the manager binary
-# Override BASE_IMAGE to build from another registry, e.g. docker.io/library/golang:1.26
-ARG BASE_IMAGE=golang:1.26
+# Override BASE_IMAGE to build from another registry, e.g. docker.io/library/golang:1.26.10
+ARG BASE_IMAGE=golang:1.26.10
 FROM ${BASE_IMAGE} AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
